@@ -8,12 +8,20 @@ Resolve **shortxlinks.com** ad-gateway links to their real destination — no ad
 
 ```console
 $ python bypass.py https://shortxlinks.com/EXAMPLE
-Input: https://shortxlinks.com/EXAMPLE
-Resolving ...
-    waiting 27s ...
-...
-FINAL: https://download.example/file.zip
+
+┌──────────────────────────────────────────────┐
+│ shortlink-bypass                             │
+│ shortxlinks / adlinkfly resolver             │
+│ by stav3ng3r                                 │
+└──────────────────────────────────────────────┘
+
+    ⏳ waiting 27s for server timer
+
+✔ 7 hops bypassed
+https://download.example/file.zip
 ```
+
+Default output is one counter and the destination. In a terminal the timer renders as a live countdown bar; `-v` adds the hop log.
 
 ## Why
 
@@ -53,36 +61,49 @@ python bypass.py -v https://shortxlinks.com/EXAMPLE
 ```
 
 ```console
-Input: https://shortxlinks.com/EXAMPLE
-Resolving ...
-    waiting 27s ...
+$ python bypass.py -v https://shortxlinks.com/EXAMPLE
+
+┌──────────────────────────────────────────────┐
+│ shortlink-bypass                             │
+│ shortxlinks / adlinkfly resolver             │
+│ by stav3ng3r                                 │
+└──────────────────────────────────────────────┘
+
+input  https://shortxlinks.com/EXAMPLE
 
 [1] GET  https://shortxlinks.com/EXAMPLE
-     200 -> https://gateway-a.example/?adlinkfly=EXAMPLE?...  (1 redirect)
-     gate form (go -> https://shortxlinks.com/EXAMPLE?...)
+    ├ 200 → https://gateway-a.example/?adlinkfly=EXAMPLE?...  (1 redirect)
+    │   302 https://gateway-a.example/?adlinkfly=EXAMPLE?...
+    └ gate form (go → https://shortxlinks.com/EXAMPLE?...)
 [2] POST https://gateway-a.example/
-     200
-     safelink payload (timer 25s)
+    ├ 200
+    └ safelink payload (timer 25s)
 [3] GET  https://gateway-a.example?safelink_redirect=...
-     200 -> https://gateway-b.example/?wpsafelink=...  (1 redirect)
-     gate form (go -> https://shortxlinks.com/EXAMPLE?...)
+    ├ 200 → https://gateway-b.example/?wpsafelink=...  (1 redirect)
+    │   302 https://gateway-b.example/?wpsafelink=...
+    └ gate form (go → https://shortxlinks.com/EXAMPLE?...)
 [4] POST https://gateway-b.example/
-     200
-     safelink payload (timer 25s)
+    ├ 200
+    └ safelink payload (timer 25s)
 [5] GET  https://gateway-b.example?safelink_redirect=...
-     200 -> https://shortxlinks.com/EXAMPLE?...  (1 redirect)
-     server timer (Too Early)
-[6] GET  https://shortxlinks.com/EXAMPLE?...
-     200
-     destination form
-[7] POST https://shortxlinks.com/links/go
-     200
-     json.url
+    ├ 200 → https://shortxlinks.com/EXAMPLE?...  (1 redirect)
+    │   302 https://shortxlinks.com/EXAMPLE?...
+    └ server timer (Too Early)
 
-FINAL: https://download.example/file.zip
+    ⏳ server timer  [████████████░░░░░░░░] 12.3s
+
+[6] GET  https://shortxlinks.com/EXAMPLE?...
+    ├ 200
+    └ destination form
+[7] POST https://shortxlinks.com/links/go
+    ├ 200
+    └ json.url
+
+✔ 7 hops bypassed
+https://download.example/file.zip
 ```
 
-Example hop log: hostnames and tokens are generalized.
+Example hop log: hostnames and tokens are generalized; the timer animates in place.
 
 ### Multiple links
 
@@ -96,7 +117,8 @@ Links are resolved sequentially. Each safe-link chain may include one server-enf
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-v, --verbose` | off | Print every redirect in each hop. |
+| `-v, --verbose` | off | Show every hop and redirect; the default prints only the hop count and destination. |
+| `--color {auto,always,never}` | `auto` | Colorize output; honors `NO_COLOR`. |
 | `--json` | off | Emit machine-readable JSON (array when multiple URLs are given). |
 | `--check` | off | Request the final URL and report its HTTP status. |
 | `--timeout SEC` | `30` | Per-request timeout. |

@@ -27,11 +27,13 @@ import argparse
 import base64
 import html as htmlmod
 import json
+import os
 import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urljoin, urlparse
 
 try:
@@ -101,6 +103,89 @@ def shorten(url: str, width: int = 100) -> str:
     if url is None:
         return ""
     return url if len(url) <= width else url[: width - 3] + "..."
+
+
+# --------------------------------------------------------------------------- ui
+
+RESET = "\x1b[0m"
+BOLD = "\x1b[1m"
+DIM = "\x1b[2m"
+CYAN = "\x1b[36m"
+MAGENTA = "\x1b[35m"
+GREEN = "\x1b[32m"
+YELLOW = "\x1b[33m"
+RED = "\x1b[31m"
+BLUE = "\x1b[34m"
+GREY = "\x1b[90m"
+
+
+def _supports_color(stream, mode: str) -> bool:
+    if mode == "never":
+        return False
+    if mode == "always":
+        return True
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("TERM", "").lower() == "dumb":
+        return False
+    forced = os.environ.get("FORCE_COLOR") or os.environ.get("CLICOLOR_FORCE")
+    if forced and forced != "0":
+        return True
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
+def _enable_windows_vt() -> bool:
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetStdHandle.restype = ctypes.c_void_p
+        kernel32.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        kernel32.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except Exception:
+        return False
+
+
+def _encode_ok(text: str) -> bool:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+@dataclass(frozen=True)
+class Glyphs:
+    arrow: str
+    branch: str
+    last: str
+    pipe: str
+    ok: str
+    fail: str
+    wait: str
+    full: str
+    empty: str
+    rule: str
+    tl: str
+    tr: str
+    bl: str
+    br: str
+
+
+_UNICODE_GLYPHS = Glyphs("→", "├", "└", "│", "✔", "✖", "⏳", "█", "░", "─", "┌", "┐", "└", "┘")
+_ASCII_GLYPHS = Glyphs("->", "|-", "\\-", "|", "OK", "X", "..", "#", "-", "-", "+", "+", "+", "+")
+
+
+def _glyphs() -> Glyphs:
+    return _UNICODE_GLYPHS if _encode_ok("→├└│✔✖⏳█░─") else _ASCII_GLYPHS
 
 
 @dataclass
@@ -184,6 +269,190 @@ class Hop:
             "redirects": [{"status": s, "location": loc} for s, loc in self.redirects],
             "note": self.note,
         }
+
+
+class Reporter:
+    def __init__(
+        self, enabled: bool = True, color_mode: str = "auto", verbose: bool = False
+    ) -> None:
+        self.enabled = enabled
+        self.verbose = verbose
+        self.stream = sys.stdout
+        self.tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        self.color = _supports_color(self.stream, color_mode)
+        if self.color and self.tty and os.name == "nt":
+            self.color = _enable_windows_vt()
+        self.g = _glyphs()
+        self.width = max(40, min(shutil.get_terminal_size((100, 24)).columns, 160))
+
+    def paint(self, text: str, *codes: str) -> str:
+        if not self.color or not codes:
+            return text
+        return "".join(codes) + text + RESET
+
+    def banner(self) -> None:
+        if not self.enabled:
+            return
+        inner = 44
+        title = "shortlink-bypass"
+        tagline = "shortxlinks / adlinkfly resolver"
+        attribution = "by stav3ng3r"
+        top = self.paint(self.g.tl + self.g.rule * (inner + 2) + self.g.tr, DIM)
+        bottom = self.paint(self.g.bl + self.g.rule * (inner + 2) + self.g.br, DIM)
+        rendered_attribution = self.paint("by ", DIM) + self.paint("stav3ng3r", CYAN, BOLD)
+
+        def row(plain: str, rendered: str) -> str:
+            pad = " " * max(0, inner - len(plain))
+            return "%s %s%s %s" % (
+                self.paint(self.g.pipe, DIM),
+                rendered,
+                pad,
+                self.paint(self.g.pipe, DIM),
+            )
+
+        print()
+        print(top)
+        print(row(title, self.paint(title, BOLD, CYAN)))
+        print(row(tagline, self.paint(tagline, DIM)))
+        print(row(attribution, rendered_attribution))
+        print(bottom)
+
+    def header(self, url: str) -> None:
+        if not self.enabled:
+            return
+        print()
+        print(self.paint("input", DIM) + "  " + shorten(url, max(30, self.width - 7)))
+        print()
+
+    def hop(self, hop: Hop, index: int) -> None:
+        if not self.enabled or not self.verbose:
+            return
+        method_color = CYAN if hop.method == "GET" else MAGENTA if hop.method == "POST" else BLUE
+        method = self.paint("%-4s" % hop.method, method_color)
+        prefix_plain = "[%d] %s " % (index, hop.method.ljust(4))
+        print(prefix_plain.replace(hop.method.ljust(4), method) + shorten(hop.url, max(30, self.width - len(prefix_plain))))
+
+        has_status = hop.status is not None
+        has_note = bool(hop.note)
+        show_redirects = self.verbose and bool(hop.redirects)
+
+        if has_status:
+            branch = self.g.branch if (has_note or show_redirects) else self.g.last
+            color = GREEN if 200 <= hop.status < 300 else YELLOW if 300 <= hop.status < 400 else RED
+            line = "    %s %s" % (self.paint(branch, DIM), self.paint(str(hop.status), color, BOLD))
+            if hop.final_url and hop.final_url != hop.url:
+                line += " %s %s" % (
+                    self.paint(self.g.arrow, DIM),
+                    shorten(hop.final_url, max(24, self.width - 14)),
+                )
+            if hop.redirects:
+                line += self.paint(
+                    "  (%d redirect%s)" % (len(hop.redirects), "" if len(hop.redirects) == 1 else "s"),
+                    DIM,
+                )
+            print(line)
+
+        if show_redirects:
+            indent = "    %s   " % self.paint(self.g.pipe, DIM)
+            for status, location in hop.redirects:
+                print(
+                    "%s%s %s"
+                    % (
+                        indent,
+                        self.paint(str(status), DIM),
+                        shorten(location or "", max(24, self.width - 12)),
+                    )
+                )
+
+        if has_note:
+            note = hop.note
+            if self.g.arrow != "->":
+                note = note.replace(" -> ", " %s " % self.g.arrow)
+            print("    %s %s" % (self.paint(self.g.last, DIM), self.paint(note, DIM)))
+
+    def wait(self, seconds: float) -> None:
+        if not self.enabled:
+            time.sleep(seconds)
+            return
+        seconds = max(0.0, float(seconds))
+        if not self.tty:
+            print("    %s waiting %ds for server timer" % (self.g.wait, round(seconds)), file=sys.stderr)
+            time.sleep(seconds)
+            return
+
+        label = "    %s %s" % (self.paint(self.g.wait, YELLOW), self.paint("server timer", DIM))
+        bar_width = min(20, max(10, self.width - 44))
+        start = time.monotonic()
+        clear = "\x1b[K" if self.color else ""
+        try:
+            while True:
+                remaining = seconds - (time.monotonic() - start)
+                if remaining <= 0:
+                    break
+                fraction = 1.0 - (remaining / seconds if seconds else 1.0)
+                filled = int(fraction * bar_width)
+                bar = self.paint(self.g.full * filled, CYAN) + self.paint(
+                    self.g.empty * (bar_width - filled), GREY
+                )
+                self.stream.write(("\r%s  [%s] %4.1fs" % (label, bar, remaining)) + clear)
+                self.stream.flush()
+                time.sleep(0.1)
+        finally:
+            self.stream.write("\r" + " " * 120 + "\r")
+            self.stream.flush()
+
+    def result(
+        self,
+        final: Optional[str],
+        error: Optional[str],
+        last: Optional[str],
+        hops_count: int,
+    ) -> None:
+        if not self.enabled:
+            return
+        print()
+        count = "%d hop%s" % (hops_count, "" if hops_count == 1 else "s")
+        if final and error is None:
+            print(self.paint("%s %s bypassed" % (self.g.ok, count), GREEN, BOLD))
+            print(self.paint(final, GREEN, BOLD))
+        elif final:
+            print(
+                self.paint("%s blocked after %s" % (self.g.fail, count), YELLOW, BOLD)
+                + "  "
+                + self.paint(error or "", YELLOW)
+            )
+            print(self.paint("last  ", DIM) + final)
+        else:
+            print(
+                self.paint("%s failed after %s" % (self.g.fail, count), RED, BOLD)
+                + "  "
+                + self.paint(error or "no destination found", RED)
+            )
+            if last:
+                print(self.paint("last  ", DIM) + last)
+
+    def check(self, status: Optional[int], url: str, error: Optional[str] = None) -> None:
+        if not self.enabled:
+            return
+        if status is None:
+            print(
+                "  "
+                + self.paint("check", DIM)
+                + "  "
+                + self.paint("unreachable", RED)
+                + "  "
+                + (error or "")
+            )
+            return
+        color = GREEN if 200 <= status < 300 else YELLOW if 300 <= status < 400 else RED
+        print(
+            "  "
+            + self.paint("check", DIM)
+            + "  "
+            + self.paint("HTTP %d" % status, color, BOLD)
+            + "  "
+            + shorten(url, max(20, self.width - 20))
+        )
 
 
 class Resolver:
@@ -358,7 +627,12 @@ class Resolver:
 
     # -- main loop ---------------------------------------------------------
 
-    def resolve(self, url: str) -> Tuple[Optional[str], List[Hop], Optional[str]]:
+    def resolve(
+        self,
+        url: str,
+        on_hop: Optional[Callable[[Hop, int], None]] = None,
+        wait_fn: Optional[Callable[[float], None]] = None,
+    ) -> Tuple[Optional[str], List[Hop], Optional[str]]:
         hops: List[Hop] = []
         method, target, data = "GET", url, None
         referer: Optional[str] = None
@@ -369,14 +643,20 @@ class Resolver:
         for _ in range(self.max_hops):
             key = (method, target, json.dumps(data, sort_keys=True) if data else "")
             if key in visited:
-                hops.append(Hop(method, target, None, "", [], "loop detected"))
+                hop = Hop(method, target, None, "", [], "loop detected")
+                hops.append(hop)
+                if on_hop:
+                    on_hop(hop, len(hops))
                 return None, hops, "redirect loop"
             visited.add(key)
 
             try:
                 response = self.request(method, target, data=data, referer=referer, ajax=ajax)
             except requests.RequestException as exc:
-                hops.append(Hop(method, target, None, "", [], "error: %s" % exc))
+                hop = Hop(method, target, None, "", [], "error: %s" % exc)
+                hops.append(hop)
+                if on_hop:
+                    on_hop(hop, len(hops))
                 return None, hops, "request failed: %s" % exc
 
             redirects = [(h.status_code, h.headers.get("Location")) for h in response.history]
@@ -390,6 +670,8 @@ class Resolver:
                 step.get("note", "") if step else "",
             )
             hops.append(hop)
+            if on_hop:
+                on_hop(hop, len(hops))
 
             if step is None:
                 return response.url, hops, None
@@ -404,8 +686,10 @@ class Resolver:
                 if retries > 2:
                     return None, hops, "server timer never cleared"
                 wait = min(max(float(step["delay"]) + 2.0, 5.0), self.max_wait)
-                print("    waiting %gs ..." % wait, file=sys.stderr)
-                time.sleep(wait)
+                if wait_fn:
+                    wait_fn(wait)
+                else:
+                    time.sleep(wait)
                 visited.discard(key)  # same URL is re-requested after the timer
                 method, target, data, ajax = "GET", response.url, None, False
                 referer = None
@@ -424,26 +708,6 @@ class Resolver:
 
 
 # --------------------------------------------------------------------------- output
-
-
-def print_hops(hops: List[Hop], verbose: bool) -> None:
-    for index, hop in enumerate(hops, 1):
-        print("[%d] %-4s %s" % (index, hop.method, shorten(hop.url)))
-        if hop.status is not None:
-            line = "     %s" % hop.status
-            if hop.final_url and hop.final_url != hop.url:
-                line += " -> " + shorten(hop.final_url)
-            if hop.redirects:
-                line += "  (%d redirect%s)" % (
-                    len(hop.redirects),
-                    "" if len(hop.redirects) == 1 else "s",
-                )
-            print(line)
-            if verbose:
-                for status, location in hop.redirects:
-                    print("       %s %s" % (status, shorten(location or "", 92)))
-        if hop.note:
-            print("     " + hop.note)
 
 
 def check_url(url: str, timeout: float) -> dict:
@@ -484,8 +748,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--max-hops", type=int, default=15, metavar="N")
     parser.add_argument("--max-wait", type=float, default=90.0, metavar="SEC")
     parser.add_argument("--insecure", action="store_true", help="skip TLS verification")
+    parser.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="colorize output: auto, always, never (default: auto)",
+    )
     args = parser.parse_args(argv)
 
+    reporter = Reporter(enabled=not args.as_json, color_mode=args.color, verbose=args.verbose)
+    if not args.as_json:
+        reporter.banner()
     results = []
     failed = False
 
@@ -496,12 +769,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             failed = True
             continue
 
-        if not args.as_json:
-            if len(args.urls) > 1:
-                print("=== %s" % url)
-            else:
-                print("Input: %s" % url)
-                print("Resolving ...")
+        if not args.as_json and args.verbose:
+            reporter.header(url)
 
         resolver = Resolver(
             timeout=args.timeout,
@@ -510,11 +779,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             insecure=args.insecure,
             verbose=args.verbose,
         )
-        final, hops, error = resolver.resolve(url)
-
-        if not args.as_json:
-            print()
-            print_hops(hops, args.verbose)
+        final, hops, error = resolver.resolve(
+            url,
+            on_hop=None if args.as_json else reporter.hop,
+            wait_fn=None if args.as_json else reporter.wait,
+        )
 
         result = {
             "input": url,
@@ -531,22 +800,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             failed = True
 
         if not args.as_json:
-            print()
-            if final and error is None:
-                print("FINAL: %s" % final)
-            elif final:
-                print("LAST:  %s" % final)
-                print("WARN:  %s" % error)
-            else:
-                print("FAILED: %s" % (error or "no destination found"))
+            last = (hops[-1].final_url or hops[-1].url) if hops else None
+            reporter.result(final, error, last, len(hops))
             if "check" in result:
                 checked = result["check"]
-                if checked.get("status") is None:
-                    print("CHECK: unreachable (%s)" % checked.get("error"))
-                else:
-                    print("CHECK: HTTP %s %s" % (checked["status"], shorten(checked.get("url", ""))))
-            if position != len(args.urls) - 1:
-                print()
+                reporter.check(
+                    checked.get("status"),
+                    checked.get("url", final or ""),
+                    checked.get("error"),
+                )
 
     if args.as_json:
         print(json.dumps(results if len(results) > 1 else results[0], indent=2))
