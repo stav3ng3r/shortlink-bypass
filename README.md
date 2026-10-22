@@ -1,8 +1,10 @@
 # shortlink-bypass
 
-Resolve ad-gateway shortlinks to their real destination — no ads, no JavaScript, no browser.
+Resolve **shortxlinks.com** ad-gateway links to their real destination — no ads, no JavaScript, no browser.
 
-`shortlink-bypass` replays the chain between a shortened link and its target: HTTP redirects, interstitial forms, base64 gate payloads, WordPress safelink hops, and the shortener's final JSON response. It returns the destination without loading a single ad and without executing page scripts.
+`shortlink-bypass` replays the specific chain used by shortxlinks.com: adlinkfly gateways → WordPress safelink hops → a timed token → the CakePHP `/links/go` JSON response. It returns the destination without loading an ad or executing page scripts.
+
+> **Scope:** this is not a universal shortener resolver. Plain `3xx` links work for any URL, and the same handlers may match other adlinkfly / WP-Safelink deployments, but JavaScript-only, captcha-gated, or provider-specific shorteners are out of scope. For bit.ly/tinyurl-style links, `curl -L` is enough.
 
 ```console
 $ python bypass.py https://shortxlinks.com/EXAMPLE
@@ -15,13 +17,13 @@ FINAL: https://download.example/file.zip
 
 ## Why
 
-Safelink shorteners wrap a link in several ad gateways. Opening one in a browser means scripts, pop-unders, and redirect loops before you reach the file you asked for. The gateways are deterministic though: each hop is either a redirect, an auto-submitted form, a base64 payload, or a timed token. This tool drives that state machine directly and skips everything else.
+The shortxlinks.com chain wraps a link in several ad gateways. Opening one in a browser means scripts, pop-unders, and redirect loops before you reach the file you asked for. Its hops are deterministic though: each one is a redirect, an auto-submitted form, a base64 payload, or a timed token. This tool drives that state machine directly and skips everything else.
 
 ## Features
 
-- Follows 3xx redirects, `<meta http-equiv="refresh">`, and literal `location` assignments.
-- Replays adlinkfly-style `go` forms and WordPress safelink `newwpsafelink` payloads (`linkr`, `second_safelink_url`, `newsafelink`).
-- Submits CakePHP destination forms (`ad_form_data`, `_csrfToken`, `_Token[...]`) and reads the final `url` from the JSON response.
+- Follows 3xx redirects, `<meta http-equiv="refresh">`, and literal `location` assignments (works on any provider that uses them).
+- Replays adlinkfly-style `go` forms and WordPress safelink `newwpsafelink` payloads (`linkr`, `second_safelink_url`, `newsafelink`) as used by shortxlinks.
+- Submits the shortxlinks CakePHP destination form (`ad_form_data`, `_csrfToken`, `_Token[...]`) and reads the final `url` from its JSON response.
 - Handles the server-side timer (`Too Early`) by waiting the advertised delay, then retrying.
 - Detects Cloudflare / JS challenges and captchas and stops with a clear error instead of looping.
 - `--json` for scripting, `--check` to probe the destination, `-v` for the full hop log.
@@ -168,9 +170,16 @@ Exit codes: `0` destination found, `2` blocked or failed.
 
 No page script is ever executed, so no ad network is contacted by the tool itself.
 
-## Compatibility
+## Supported chains
 
-Validated against the shortxlinks.com adlinkfly → WP-Safelink → `/links/go` chain (October 2026). Gateways rotate hostnames; the resolver matches behavior, not domains.
+| Provider pattern | Status |
+| --- | --- |
+| shortxlinks.com (adlinkfly → WP-Safelink → timed token → `/links/go`) | Supported; validated October 2026 |
+| Other adlinkfly / WP-Safelink deployments using identical forms and payload keys | Best-effort; not validated |
+| Plain `3xx` shorteners (bit.ly, tinyurl, …) | Followed by the HTTP client; no special handling needed |
+| JavaScript-only, captcha-gated, or custom API shorteners | Not supported; the tool stops and reports where |
+
+Gateways rotate hostnames; the resolver matches behavior, not domains.
 
 ## Limitations
 
@@ -178,7 +187,7 @@ Validated against the shortxlinks.com adlinkfly → WP-Safelink → `/links/go` 
 - **Captchas are not solved.** adcopy / reCAPTCHA gates are detected and reported as blocked.
 - **JS challenges are not solved.** Cloudflare interstitials need a real browser; the tool returns the last reachable URL and a warning.
 - **HTTP chains are followed to the end.** When a shortener uses only 3xx, the destination is fetched as part of resolving it. Safe-link chains return the URL from JSON without touching the target.
-- **Pattern coverage.** It targets the adlinkfly / WP-Safelink / CakePHP shortener pattern. Unknown shorteners that require script execution may not resolve; the hop log shows where it stopped.
+- **Provider-specific.** It is built for the shortxlinks.com chain, not as a general shortener client. Other adlinkfly / WP-Safelink sites may work if they use identical forms and keys; anything requiring JavaScript, a custom API, or a captcha will not.
 
 ## Disclaimer
 

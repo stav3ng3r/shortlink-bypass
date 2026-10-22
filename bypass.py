@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-shortlink-bypass - resolve shortened / safelink / ad-gateway URLs to the final target.
+shortlink-bypass - resolve shortxlinks.com ad-gateway links to the final target.
 
-The resolver replays the chain without executing JavaScript or loading any ad:
+The resolver replays the shortxlinks / adlinkfly / WP-Safelink chain without
+executing JavaScript or loading any ad:
 
   HTTP 3xx -> meta refresh -> location assignment -> interstitial forms
   -> adlinkfly `go` payload -> WordPress safelink `newwpsafelink` payload
@@ -468,11 +469,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="bypass.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Resolve shortened / safelink URLs to the final destination without ads or JS.",
+        description="Resolve shortxlinks.com ad-gateway links to the final destination without ads or JS.",
         epilog=(
-            "Handles: HTTP 3xx, meta refresh, location assignments, adlinkfly `go` forms,\n"
-            "WordPress safelink `newwpsafelink` payloads, and /links/go JSON shorteners.\n"
-            "Captchas and JS challenges are reported, never solved."
+            "Handles the shortxlinks.com chain: HTTP 3xx, meta refresh, location assignments,\n"
+            "adlinkfly `go` forms, WordPress safelink `newwpsafelink` payloads, and /links/go JSON.\n"
+            "Other providers work only if they reuse the same forms; captchas are never solved."
         ),
     )
     parser.add_argument("urls", nargs="+", metavar="URL", help="short URL(s) to resolve")
